@@ -12,6 +12,7 @@ classdef fmri_dataset
         exclusionTbl
         units
         TR
+        derivspath
     end
     properties(Dependent)
         sessions
@@ -68,7 +69,7 @@ classdef fmri_dataset
             value = cellstr(spm_select('FPListRec', obj.behavDir, obj.behavFilt));
         end
         function value = get.boldFiles(obj)
-            value = cellstr(spm_select('FPListRec', obj.boldDir, obj.boldFilt));
+            value = cellstr(spm_select('ExtFPListRec', obj.boldDir, obj.boldFilt));
         end
         function value = get.anatFiles(obj)
             value = cellstr(spm_select('FPListRec', obj.anatDir, obj.anatFilt));
@@ -78,6 +79,7 @@ classdef fmri_dataset
         end
         function value = get.sessions(obj)
             value = unique(regexp(obj.boldFiles, 'ses-[0-9]?[0-9]', 'match', 'once'))';
+            value = value(~cellfun(@isempty, value));
         end
     end
     methods(Static)
