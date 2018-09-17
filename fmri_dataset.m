@@ -1,75 +1,70 @@
 classdef fmri_dataset
     properties
-        subjects
-        behavDir
-        behavFilt
-        boldDir
-        boldFilt
-        anatDir
-        anatFilt
-        maskDir
-        maskFilt
-        exclusionTbl
-        units
-        TR
-        derivspath
-    end
-    properties(Dependent)
-        sessions
-        behavFiles
-        boldFiles
-        anatFiles
-        maskFiles
+        subjects      = {'sub-01' 'sub-02' 'sub-03'};
+        sessions      = {'ses-01' 'ses-02' 'ses-03'}; 
+        behavDir      = '/fullpath/to/behavioral/data/';
+        behavFilt     = '.*events\.tsv';
+        behavFiles    = {''};
+        boldDir       = '/fullpath/to/bold/data/';
+        boldFilt      = '.*_bold\.nii';
+        boldFiles     = {''};
+        anatDir       = '/fullpath/to/anat/data';
+        anatFilt      = '.*_T1\.nii';
+        anatFiles     = '';
+        maskDir       = '/fullpath/to/mask/images'
+        maskFilt      = '.*_mask\.nii';
+        maskFiles     = {''};
+        analysisDir   = '';
+        exclusionTbl  = table();
+        units         = 'secs';
+        TR            = 2;
+        derivDir      = '/fullpath/to/derivatives';
+        derivFilt     = '^smooth_.*\.nii';
+        derivFiles    = {''};
+        analyses
     end
     methods
         function obj = fmri_dataset(varargin)
-            switch varargin{1}
-                case 'auto'
 
-                    % BIDS formatted dataset
-                    root = varargin{2};
+            if ~isempty(varargin)
+            
+                root = varargin{1};
+                
+                assert(exist(root, 'dir') == 7, 'BIDS root does not exist')
 
-                    % gunzip, if necessary
-                    if isempty(spm_select('FPListRec', root, '.*\.nii$'))
-                        gzippedFiles = spm_select('FPListRec', root, '.*\.nii\.gz');
-                        if ~isempty(gzippedFiles)
-                            fprintf('gunzipping files...\n\n')
-                            gunzip(gzippedFiles)
-                        end
+                % gunzip, if necessary
+                if isempty(spm_select('FPListRec', root, '.*\.nii$'))
+                    gzippedFiles = spm_select('FPListRec', root, '.*\.nii\.gz');
+                    if ~isempty(gzippedFiles)
+                        fprintf('gunzipping files...\n\n')
+                        gunzip(gzippedFiles)
                     end
-                    
-                    % an SPM tool
-                    BIDS = spm_BIDS(root);
+                end
 
-                    obj.subjects   = {BIDS.subjects.name}';
-                    obj.behavDir   = root;
-                    obj.behavFilt  = '.*_events.tsv$';
-                    obj.boldDir    = root;
-                    obj.boldFilt   = '.*_bold\.nii$';
-                    obj.anatDir    = root;
-                    obj.anatFilt   = '_T1w\.nii$';
-                    obj.maskDir    = root;
-                    obj.maskFilt   = '.*_mask\.nii$';
+                % an SPM tool
+                BIDS = spm_BIDS(root);
 
-                case 'manual'
-
-                    [subjects, bDir, bFilt, iDir, iFilt, maskDir, maskFilt, exclusionTbl] = varargin{2:end};
-                    obj.subjects   = subjects;
-                    obj.behavDir   = bDir;
-                    obj.behavFilt  = bFilt;
-                    obj.boldDir    = iDir;
-                    obj.boldFilt   = iFilt;
-                    obj.maskDir    = maskDir;
-                    obj.maskFilt   = maskFilt;
-                    obj.exclusionTbl = exclusionTbl;
-
+                obj.subjects   = {BIDS.subjects.name};
+                obj.behavDir   = root;
+                obj.behavFilt  = '.*_events.tsv$';
+                obj.boldDir    = root;
+                obj.boldFilt   = '.*_bold\.nii$';
+                obj.anatDir    = root;
+                obj.anatFilt   = '_T1w\.nii$';
+                obj.maskDir    = root;
+                obj.maskFilt   = '.*_mask\.nii$';  
+                
             end
+
         end
         function value = get.behavFiles(obj)
             value = cellstr(spm_select('FPListRec', obj.behavDir, obj.behavFilt));
         end
         function value = get.boldFiles(obj)
             value = cellstr(spm_select('ExtFPListRec', obj.boldDir, obj.boldFilt));
+        end
+        function value = get.derivFiles(obj)
+            value = cellstr(spm_select('ExtFPListRec', obj.derivDir, obj.derivFilt));
         end
         function value = get.anatFiles(obj)
             value = cellstr(spm_select('FPListRec', obj.anatDir, obj.anatFilt));

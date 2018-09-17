@@ -1,12 +1,20 @@
 classdef glm_firstlevel
    properties
-       dataset
        name
        dir
        task
-       trialtypes
-       contrasts
+       trialtypes    = struct('name', '', 'filter', @(x) x)
+       contrasts     = struct('name', '', 'positive', '', 'negative', '')
        mask
+       subjects      = {'sub-01' 'sub-02' 'sub-03'};
+       sessions      = {'ses-01' 'ses-02' 'ses-03'};
+       behavFiles    = {''};
+       derivFiles    = {''};
+       derivDir      = '';
+       maskFiles     = {''};
+       exclusionTbl  = table();
+       units         = 'seconds';
+       TR            = 2;
    end
    properties(Dependent)
        fullpath
@@ -15,13 +23,19 @@ classdef glm_firstlevel
        multiConds
    end
    methods
-        function obj = glm_firstlevel(dataset, name, dir, task, trialtypes, contrasts)
-            obj.dataset      = dataset;
-            obj.name         = name;
-            obj.dir          = dir;
-            obj.task         = task;
-            obj.trialtypes   = trialtypes;
-            obj.contrasts    = contrasts;
+        function obj = glm_firstlevel(dataset)
+            if isa(dataset, 'fmri_dataset')
+                obj.dir          = dataset.analysisDir;
+                obj.subjects     = dataset.subjects;
+                obj.sessions     = dataset.sessions;
+                obj.behavFiles   = dataset.behavFiles;
+                obj.derivDir     = dataset.derivDir;
+                obj.derivFiles   = dataset.derivFiles;
+                obj.maskFiles    = dataset.maskFiles;
+                obj.exclusionTbl = dataset.exclusionTbl;
+                obj.units        = dataset.units;
+                obj.TR           = dataset.TR;
+            end
         end
         function value = get.fullpath(obj)
             value = fullfile(obj.dir, obj.name);
@@ -38,7 +52,7 @@ classdef glm_firstlevel
             value = value(~contains(value, 'SecondLevel'));
         end
         function value = get.multiRegs(obj)
-            value = spm_select('FPListRec', obj.dataset.derivspath, '^rp_.*\.txt$');
+            value = spm_select('FPListRec', obj.derivDir, '^rp_.*\.txt$');
         end
         function define(obj, subrange)
             % Write out the necessary multiple condition files for a SPM
@@ -49,26 +63,26 @@ classdef glm_firstlevel
             % trial bin and FALSE = this event DOES NOT belong in this 
             % trial bin.
             
-            event_tsvs = obj.dataset.behavFiles;
+            event_tsvs = obj.behavFiles;
     
             % loop over a range of subjects specified as a vector by the
             % user
             for sub = subrange
                 
                 % Has this subject already been run?
-                if ~isempty(obj.multiConds(contains(obj.multiConds, obj.dataset.subjects{sub})))
-                    fprintf('Subject %s has already been defined for this model ... \n\n', obj.dataset.subjects{sub})
+                if ~isempty(obj.multiConds(contains(obj.multiConds, obj.subjects{sub})))
+                    fprintf('Subject %s has already been defined for this model ... \n\n', obj.subjects{sub})
                     continue
                 end
                 
-                fprintf('Defining Subject %s ... \n\n', obj.dataset.subjects{sub})
+                fprintf('Defining Subject %s ... \n\n', obj.subjects{sub})
 
-                if ~exist(fullfile(obj.fullpath, obj.dataset.subjects{sub}), 'dir')
-                    mkdir(fullfile(obj.fullpath, obj.dataset.subjects{sub}))
+                if ~exist(fullfile(obj.fullpath, obj.subjects{sub}), 'dir')
+                    mkdir(fullfile(obj.fullpath, obj.subjects{sub}))
                 end
                 
                 % 
-                event_tsvs(~contains(event_tsvs, obj.dataset.subjects{sub})) = [];
+                event_tsvs(~contains(event_tsvs, obj.subjects{sub})) = [];
                 event_tsvs(~contains(event_tsvs, obj.task)) = [];
                 event_tbls = cellfun(@(x) readtable(x, 'FileType', 'text', 'Delimiter', '\t'), event_tsvs, 'UniformOutput', false);
 
@@ -82,13 +96,13 @@ classdef glm_firstlevel
                     curSess = event_tbls{ses};
                     % over trial types
                     for tt = 1:length(obj.trialtypes)
-                        belongs_in_current_tt = logical(curSess.(['TT_' obj.trialtypes{tt}]));
-                        names{tt}     = obj.trialtypes{tt};
+                        belongs_in_current_tt = obj.trialtypes(tt).filter(curSess);
+                        names{tt}     = obj.trialtypes(tt).name;
                         onsets{tt}    = curSess.onset(belongs_in_current_tt);
                         durations{tt} = curSess.duration(belongs_in_current_tt);
                     end
-                    outfilename = sprintf('sub-%s_ses-%02d_multicond.mat', obj.dataset.subjects{sub}, ses);
-                    outfile = fullfile(obj.fullpath, obj.dataset.subjects{sub}, outfilename);
+                    outfilename = sprintf('sub-%s_ses-%02d_multicond.mat', obj.subjects{sub}, ses);
+                    outfile = fullfile(obj.fullpath, obj.subjects{sub}, outfilename);
                     save(outfile, 'names', 'onsets', 'durations')
                 end
             end
@@ -97,14 +111,14 @@ classdef glm_firstlevel
             % show = true = display in GUI
             % MUST "define" the model first
             
-            boldFiles = obj.dataset.boldFiles;
+            boldFiles = obj.derivFiles;
             boldFiles(~contains(boldFiles, obj.task)) = []; % remove other tasks
 
             for s = subrange
                 
                 % Has this subject already been run?
-                if ~isempty(obj.SPMmats(contains(obj.SPMmats, obj.dataset.subjects{s})))
-                    fprintf('This model has already been specified for Subject %s ... \n\n', obj.dataset.subjects{s})
+                if ~isempty(obj.SPMmats(contains(obj.SPMmats, obj.subjects{s})))
+                    fprintf('This model has already been specified for Subject %s ... \n\n', obj.subjects{s})
                     continue
                 end
 
@@ -119,22 +133,22 @@ classdef glm_firstlevel
                 end
 
                 % Directory
-                matlabbatch{1}.spm.stats.fmri_spec.dir = cellstr(fullfile(obj.fullpath, obj.dataset.subjects{s}));
+                matlabbatch{1}.spm.stats.fmri_spec.dir = cellstr(fullfile(obj.fullpath, obj.subjects{s}));
 
                 % Model Parameters
-                matlabbatch{1}.spm.stats.fmri_spec.timing.units   = obj.dataset.units;
-                matlabbatch{1}.spm.stats.fmri_spec.timing.RT      = obj.dataset.TR;
+                matlabbatch{1}.spm.stats.fmri_spec.timing.units   = obj.units;
+                matlabbatch{1}.spm.stats.fmri_spec.timing.RT      = obj.TR;
                 matlabbatch{1}.spm.stats.fmri_spec.timing.fmri_t  = 16;
                 matlabbatch{1}.spm.stats.fmri_spec.timing.fmri_t0 = 1;
 
                 % Session Specific
                 for curRun = 1:length(runs)
                     
-                    subFilt = contains(boldFiles, obj.dataset.subjects{s});
+                    subFilt = contains(boldFiles, obj.subjects{s});
                     runFilt = contains(boldFiles, runs{curRun});
                     matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).scans = boldFiles(subFilt & runFilt); %#ok<*AGROW>
                     
-                    subFilt = contains(obj.multiConds, obj.dataset.subjects{s});
+                    subFilt = contains(obj.multiConds, obj.subjects{s});
                     runFilt = contains(obj.multiConds, runs{curRun}); 
                     if ~show
                         matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond  = struct('name', {}, 'onset', {}, 'duration', {}, 'tmod', {}, 'pmod', {});                       
@@ -157,7 +171,7 @@ classdef glm_firstlevel
                     end
                     matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).regress   = struct('name', {}, 'val', {});
                     
-                    subFilt = contains(obj.multiRegs, obj.dataset.subjects{s});
+                    subFilt = contains(obj.multiRegs, obj.subjects{s});
                     runFilt = contains(obj.multiRegs, runs{curRun});
                     matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).multi_reg = cellstr(obj.multiRegs(subFilt & runFilt));
                     
@@ -205,14 +219,14 @@ classdef glm_firstlevel
             for s = subrange
                 
                 % This subject's SPMmat file
-                SPMmat = obj.SPMmats(contains(obj.SPMmats, obj.dataset.subjects{s}));
+                SPMmat = obj.SPMmats(contains(obj.SPMmats, obj.subjects{s}));
                 
                 SPM = [];
                 load(char(SPMmat));
                 
                 try
                     SPM.xVol.S;
-                    fprintf('This model has already been estimated for Subject %s \n\n', obj.dataset.subjects{s});
+                    fprintf('This model has already been estimated for Subject %s \n\n', obj.subjects{s});
                     continue
                 catch
                 end
@@ -228,7 +242,7 @@ classdef glm_firstlevel
             end
 
         end
-        function run_cons(obj, subrange)
+        function runcons(obj, subrange)
             % run the contrasts
             
             if isempty(obj.contrasts)
@@ -238,11 +252,16 @@ classdef glm_firstlevel
             for s = subrange
                 
                 SPM = [];
-                SPMmat = obj.SPMmats(contains(obj.SPMmats, obj.dataset.subjects{s}));
+                SPMmat = obj.SPMmats(contains(obj.SPMmats, obj.subjects{s}));
                 if iscellstr(SPMmat)
                     SPMmat = char(SPMmat);
                 end
                 load(SPMmat);
+                
+                if ~isempty(SPM.xCon)
+                    fprintf('There already appears to be contrasts defined for subject %s\n\n', obj.subjects{s})
+                    continue
+                end
                 
                 estimateability = spm_SpUtil('isCon',SPM.xX.X);
                 
@@ -255,23 +274,33 @@ classdef glm_firstlevel
                     % find the columns of the design matrix that have the
                     % positive side of the contrast in its name AND are
                     % able to be estimated
-                    pos    = contains(SPM.xX.name, obj.contrasts(c).positive) & estimateability;
-                    neg    = contains(SPM.xX.name, obj.contrasts(c).negative) & estimateability;
+                    isemptycellstr = @(x) isempty(x{:});
+                    if isemptycellstr(obj.contrasts(c).positive)
+                        pos    = false(1, length(SPM.xX.name));
+                    else
+                        pos    = contains(SPM.xX.name, obj.contrasts(c).positive) & estimateability;
+                        pos    = pos / length(find(pos));   
+                    end
+                    if isemptycellstr(obj.contrasts(c).negative)
+                        neg    = false(1, length(SPM.xX.name));
+                    else
+                        neg    = contains(SPM.xX.name, obj.contrasts(c).negative) & estimateability;
+                        neg    = - neg / length(find(neg));
+                    end
                     
                     % if you don't find any, skip
-                    if ~any(pos) || ~any(neg)
+                    if ~any(pos) && ~any(neg)
                         continue
                     end
                     
                     % wieght by the number of columns; combine to form
                     % contrast vector
-                    pos    = pos / length(find(pos));                    
-                    neg    = - neg / length(find(neg));
+                    
                     convec = pos + neg;
                     
                     count  = count + 1;
                     
-                    matlabbatch{1}.spm.stats.con.consess{count}.tcon.name    = obj.contrasts.name;
+                    matlabbatch{1}.spm.stats.con.consess{count}.tcon.name    = char(obj.contrasts(c).name);
                     matlabbatch{1}.spm.stats.con.consess{count}.tcon.weights = convec;
                     matlabbatch{1}.spm.stats.con.consess{count}.tcon.sessrep = 'none';
                     
