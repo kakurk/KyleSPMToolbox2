@@ -1,20 +1,27 @@
 classdef glm_firstlevel
    properties
-       name
-       dir
-       task
-       trialtypes    = struct('name', '', 'filter', @(x) x)
-       contrasts     = struct('name', '', 'positive', '', 'negative', '')
+       name             = 'SomeDescriptiveModelName';
+       dir              = '/directory/to/write/model/to';
+       task             = 'TASK';
+       trialtypes       = struct('name', '', 'filter', @(x) x)
+       contrasts        = struct('name', '', 'positive', '', 'negative', '')
        mask
-       subjects      = {'sub-01' 'sub-02' 'sub-03'};
-       sessions      = {'ses-01' 'ses-02' 'ses-03'};
-       behavFiles    = {''};
-       derivFiles    = {''};
-       derivDir      = '';
-       maskFiles     = {''};
-       exclusionTbl  = table();
-       units         = 'seconds';
-       TR            = 2;
+       subjects         = {'sub-01' 'sub-02' 'sub-03'};
+       sessions         = {'ses-01' 'ses-02' 'ses-03'};
+       behavFiles       = {''};
+       behavFilesReader = @(x) readtable(x, 'FileType', 'text', 'Delimiter', '\t');
+       derivFiles       = {''};
+       multiRegsDir     = '';
+       multiRegsFilt    = '';
+       multiRegsSpec    = @(x) x(:, {'FramewiseDisplacement', ...
+                                     'aCompCor00', 'X', 'Y', 'Z', ...
+                                     'RotX' 'RotY' 'RotZ'});
+       multiRegsReader  = @(x) readtable(x, 'FileType', 'text', 'Delimiter', '\t');
+       derivDir         = '';
+       maskFiles        = {''};
+       censorTbl        = table();
+       units            = 'seconds';
+       TR               = 2;
    end
    properties(Dependent)
        fullpath
@@ -23,7 +30,7 @@ classdef glm_firstlevel
        multiConds
    end
    methods
-        function obj = glm_firstlevel(dataset)
+        function obj   = glm_firstlevel(dataset)
             if isa(dataset, 'fmri_dataset')
                 obj.dir          = dataset.analysisDir;
                 obj.subjects     = dataset.subjects;
@@ -32,7 +39,7 @@ classdef glm_firstlevel
                 obj.derivDir     = dataset.derivDir;
                 obj.derivFiles   = dataset.derivFiles;
                 obj.maskFiles    = dataset.maskFiles;
-                obj.exclusionTbl = dataset.exclusionTbl;
+                obj.censorTbl    = dataset.censorTbl;
                 obj.units        = dataset.units;
                 obj.TR           = dataset.TR;
             end
@@ -52,7 +59,8 @@ classdef glm_firstlevel
             value = value(~contains(value, 'SecondLevel'));
         end
         function value = get.multiRegs(obj)
-            value = spm_select('FPListRec', obj.derivDir, '^rp_.*\.txt$');
+            value = cellstr(spm_select('FPListRec', obj.multiRegsDir, obj.multiRegsFilt));
+            value(~contains(value, ['task-' obj.task])) = [];
         end
         function define(obj, subrange)
             % Write out the necessary multiple condition files for a SPM
@@ -75,16 +83,22 @@ classdef glm_firstlevel
                     continue
                 end
                 
+                % Is this subject censored?
+                if isSubjectCensored(obj.subjects{sub}, obj.task)
+                    continue
+                end
+                
                 fprintf('Defining Subject %s ... \n\n', obj.subjects{sub})
 
+                % make the output directory, if needed
                 if ~exist(fullfile(obj.fullpath, obj.subjects{sub}), 'dir')
                     mkdir(fullfile(obj.fullpath, obj.subjects{sub}))
                 end
                 
-                % 
+                % read in event file using the behavFilesReader
                 event_tsvs(~contains(event_tsvs, obj.subjects{sub})) = [];
                 event_tsvs(~contains(event_tsvs, obj.task)) = [];
-                event_tbls = cellfun(@(x) readtable(x, 'FileType', 'text', 'Delimiter', '\t'), event_tsvs, 'UniformOutput', false);
+                event_tbls = cellfun(obj.behavFilesReader, event_tsvs, 'UniformOutput', false);
 
                 % See spm12 manual. Defining multiple conditions files
                 names     = [];
@@ -93,23 +107,64 @@ classdef glm_firstlevel
 
                 % over sessions
                 for ses = 1:length(event_tbls)
+                    
+                    % is this run censored?
+                    if isRunCensored(obj.subjects{sub}, obj.sessions{ses}, obj.task)
+                        continue
+                    end
+                    
                     curSess = event_tbls{ses};
+                    c = 0;
                     % over trial types
                     for tt = 1:length(obj.trialtypes)
                         belongs_in_current_tt = obj.trialtypes(tt).filter(curSess);
-                        names{tt}     = obj.trialtypes(tt).name;
-                        onsets{tt}    = curSess.onset(belongs_in_current_tt);
-                        durations{tt} = curSess.duration(belongs_in_current_tt);
+                        if ~any(belongs_in_current_tt)
+                            continue
+                        end
+                        c = c + 1;
+                        names{c}     = obj.trialtypes(tt).name;
+                        onsets{c}    = curSess.onset(belongs_in_current_tt);
+                        durations{c} = curSess.duration(belongs_in_current_tt);
                     end
-                    outfilename = sprintf('sub-%s_ses-%02d_multicond.mat', obj.subjects{sub}, ses);
+                    outfilename = sprintf('sub-%s_run-%02d_multicond.mat', obj.subjects{sub}, ses);
                     outfile = fullfile(obj.fullpath, obj.subjects{sub}, outfilename);
                     save(outfile, 'names', 'onsets', 'durations')
                 end
             end
+           function is = isSubjectCensored(subject, task)
+                if ~isempty(obj.censorTbl)
+                    taskFilt    = strcmp(obj.censorTbl.task, task);
+                    subjectFilt = strcmp(obj.censorTbl.subject, subject);
+                    includeFilt = strcmp(obj.censorTbl.run, 'include');
+                    if obj.censorTbl.censor(subjectFilt & includeFilt & taskFilt) ~= 1
+                        is = true;
+                    else
+                        is = false;
+                    end
+                else
+                    is = false;
+                end
+            end
+           function is = isRunCensored(subject, run, task)
+                if ~isempty(obj.censorTbl)
+                    taskFilt    = strcmp(obj.censorTbl.task, task);
+                    runFilt     = strcmp(obj.censorTbl.run, run);
+                    subjectFilt = strcmp(obj.censorTbl.subject, subject);
+                    if obj.censorTbl.censor(subjectFilt & runFilt & taskFilt) ~= 1
+                        is = true;
+                    else
+                        is = false;
+                    end
+                else
+                    is = false;
+                end
+            end            
         end
-        function specify(obj, show, run, subrange)
+        function specify(obj, run, subrange)
             % show = true = display in GUI
             % MUST "define" the model first
+            
+            warning('OFF', 'MATLAB:table:ModifiedAndSavedVarnames')
             
             boldFiles = obj.derivFiles;
             boldFiles(~contains(boldFiles, obj.task)) = []; % remove other tasks
@@ -119,6 +174,11 @@ classdef glm_firstlevel
                 % Has this subject already been run?
                 if ~isempty(obj.SPMmats(contains(obj.SPMmats, obj.subjects{s})))
                     fprintf('This model has already been specified for Subject %s ... \n\n', obj.subjects{s})
+                    continue
+                end
+                
+                % Do we need to censor this subject?
+                if isSubjectCensored(obj.subjects{s}, obj.task)
                     continue
                 end
 
@@ -141,41 +201,54 @@ classdef glm_firstlevel
                 matlabbatch{1}.spm.stats.fmri_spec.timing.fmri_t  = 16;
                 matlabbatch{1}.spm.stats.fmri_spec.timing.fmri_t0 = 1;
 
+                c = 0;
                 % Session Specific
                 for curRun = 1:length(runs)
                     
+                    % do we need to censor this run?
+                    if isRunCensored(obj.subjects{s}, obj.sessions{curRun}, obj.task)
+                        continue
+                    end
+                    
+                    c = c + 1;
+                    
                     subFilt = contains(boldFiles, obj.subjects{s});
                     runFilt = contains(boldFiles, runs{curRun});
-                    matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).scans = boldFiles(subFilt & runFilt); %#ok<*AGROW>
+                    matlabbatch{1}.spm.stats.fmri_spec.sess(c).scans = boldFiles(subFilt & runFilt); %#ok<*AGROW>
                     
                     subFilt = contains(obj.multiConds, obj.subjects{s});
                     runFilt = contains(obj.multiConds, runs{curRun}); 
-                    if ~show
-                        matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond  = struct('name', {}, 'onset', {}, 'duration', {}, 'tmod', {}, 'pmod', {});                       
-                        matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).multi = cellstr(obj.multiConds(subFilt & runFilt));
-                    elseif show
-                        load(obj.multiConds{subFilt & runFilt})
-                        for curTrialType = 1:length(names)
-                            matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).name     = names{curTrialType};
-                            matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).onset    = onsets{curTrialType};
-                            matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).duration = durations{curTrialType};
-                            matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).tmod     = 0;
-                            if isempty(pmod)
-                                matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).pmod = struct('name', {}, 'param', {}, 'poly', {});
-                            else
-                                matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).pmod.name  = pmod(curTrialType).name{1};
-                                matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).pmod.param = pmod(curTrialType).param{1};
-                                matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).cond(curTrialType).pmod.poly  = pmod(curTrialType).poly{1};
-                            end
+                    load(obj.multiConds{subFilt & runFilt})
+                    for curTrialType = 1:length(names)
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).name     = names{curTrialType};
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).onset    = onsets{curTrialType};
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).duration = durations{curTrialType};
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).tmod     = 0;
+                        if isempty(pmod)
+                            matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).pmod = struct('name', {}, 'param', {}, 'poly', {});
+                        else
+                            matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).pmod.name  = pmod(curTrialType).name{1};
+                            matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).pmod.param = pmod(curTrialType).param{1};
+                            matlabbatch{1}.spm.stats.fmri_spec.sess(c).cond(curTrialType).pmod.poly  = pmod(curTrialType).poly{1};
                         end
                     end
-                    matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).regress   = struct('name', {}, 'val', {});
-                    
                     subFilt = contains(obj.multiRegs, obj.subjects{s});
                     runFilt = contains(obj.multiRegs, runs{curRun});
-                    matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).multi_reg = cellstr(obj.multiRegs(subFilt & runFilt));
-                    
-                    matlabbatch{1}.spm.stats.fmri_spec.sess(curRun).hpf       = 128;
+                    R = obj.multiRegs(subFilt & runFilt);
+                    R = obj.multiRegsReader(char(R));
+                    R = obj.multiRegsSpec(R);
+                    Rnames = R.Properties.VariableNames;
+                    for r = 1:length(Rnames)
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).regress(r).name = Rnames{r};
+                        val = R.(Rnames{r});
+                        if iscellstr(val)
+                            val{strcmp(val, 'n/a')} = '0';
+                            val = cellfun(@str2double, val);
+                        end
+                        matlabbatch{1}.spm.stats.fmri_spec.sess(c).regress(r).val  = val;
+                    end
+                    matlabbatch{1}.spm.stats.fmri_spec.sess(c).multi_reg = {''};
+                    matlabbatch{1}.spm.stats.fmri_spec.sess(c).hpf       = 128;
                 end
 
                 % Misc
@@ -198,7 +271,34 @@ classdef glm_firstlevel
                 end
 
             end
-
+           function is = isSubjectCensored(subject, task)
+                if ~isempty(obj.censorTbl)
+                    taskFilt    = strcmp(obj.censorTbl.task, task);
+                    subjectFilt = strcmp(obj.censorTbl.subject, subject);
+                    includeFilt = strcmp(obj.censorTbl.run, 'include');
+                    if obj.censorTbl.censor(subjectFilt & includeFilt & taskFilt) ~= 1
+                        is = true;
+                    else
+                        is = false;
+                    end
+                else
+                    is = false;
+                end
+            end
+           function is = isRunCensored(subject, run, task)
+                if ~isempty(obj.censorTbl)
+                    taskFilt    = strcmp(obj.censorTbl.task, task);
+                    runFilt     = strcmp(obj.censorTbl.run, run);
+                    subjectFilt = strcmp(obj.censorTbl.subject, subject);
+                    if obj.censorTbl.censor(subjectFilt & runFilt & taskFilt) ~= 1
+                        is = true;
+                    else
+                        is = false;
+                    end
+                else
+                    is = false;
+                end
+           end
         end
         function inspect(obj, srange)
             % display the design matrix for subject in a specific range
@@ -220,6 +320,10 @@ classdef glm_firstlevel
                 
                 % This subject's SPMmat file
                 SPMmat = obj.SPMmats(contains(obj.SPMmats, obj.subjects{s}));
+                
+                if isempty(char(SPMmat))
+                    continue
+                end
                 
                 SPM = [];
                 load(char(SPMmat));

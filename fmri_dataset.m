@@ -15,7 +15,7 @@ classdef fmri_dataset
         maskFilt      = '.*_mask\.nii';
         maskFiles     = {''};
         analysisDir   = '';
-        exclusionTbl  = table();
+        censorTbl     = table();
         units         = 'secs';
         TR            = 2;
         derivDir      = '/fullpath/to/derivatives';
@@ -73,7 +73,7 @@ classdef fmri_dataset
             value = cellstr(spm_select('FPListRec', obj.maskDir, obj.maskFilt));
         end
         function value = get.sessions(obj)
-            value = unique(regexp(obj.boldFiles, 'ses-[0-9]?[0-9]', 'match', 'once'))';
+            value = unique(regexp(obj.boldFiles, 'run-[0-9]?[0-9]', 'match', 'once'))';
             value = value(~cellfun(@isempty, value));
         end
     end
